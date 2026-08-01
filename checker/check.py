@@ -21,7 +21,7 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 X_STORAGE_STATE_B64 = os.environ["X_STORAGE_STATE_B64"]
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+gemini_model = genai.GenerativeModel("gemini-flash-latest")
 
 
 def load_accounts() -> list[str]:
@@ -44,8 +44,10 @@ def save_state(state: dict) -> None:
 def summarize_and_translate(username: str, tweet_text: str) -> str:
     prompt = (
         f"สรุปโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
-        "กระชับ 2-4 ประโยค เก็บใจความสำคัญ ห้ามใส่ความเห็นหรือคำนำเพิ่มเติม "
-        "ตอบแค่เนื้อหาสรุปเท่านั้น:\n\n" + tweet_text
+        "กระชับ 2-4 ประโยค เก็บใจความสำคัญ "
+        "ห้ามใส่ความเห็น คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
+        "ห้ามใช้ Markdown หรือสัญลักษณ์จัดรูปแบบใดๆ (ห้ามมี **, *, #, -) "
+        "ตอบเป็นข้อความธรรมดาล้วนๆ:\n\n" + tweet_text
     )
     response = gemini_model.generate_content(prompt)
     return response.text.strip()
