@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+node_modules/
+webhook/.vercel
+x-state.json
+*.log
