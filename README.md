@@ -1,12 +1,12 @@
 # x-monitor
 
-เช็คโพสต์ใหม่จากบัญชี X (Twitter) ที่กำหนดทุก 5 นาที สรุป+แปลเป็นไทยด้วย Claude แล้วส่งเข้า Telegram ให้กดอนุมัติก่อนโพสต์เข้า Facebook Page
+เช็คโพสต์ใหม่จากบัญชี X (Twitter) ที่กำหนดทุก 5 นาที สรุป+แปลเป็นไทยด้วย Gemini (free tier) แล้วส่งเข้า Telegram ให้กดอนุมัติก่อนโพสต์เข้า Facebook Page
 
 ## สถาปัตยกรรม
 
 ```
 GitHub Actions (ทุก 5 นาที)
-  -> checker/check.py: สแครป X ด้วย Playwright -> เทียบ state.json -> สรุป+แปลด้วย Claude -> ส่ง Telegram (ปุ่ม Approve/Reject)
+  -> checker/check.py: สแครป X ด้วย Playwright -> เทียบ state.json -> สรุป+แปลด้วย Gemini -> ส่ง Telegram (ปุ่ม Approve/Reject)
 
 Vercel (webhook แบบ event-based, ฟรี)
   -> webhook/api/telegram.js: รับปุ่มที่กด -> ถ้า Approve โพสต์เข้า Facebook Page ผ่าน Graph API
@@ -47,9 +47,11 @@ base64 -w0 x-state.json > x-state.b64.txt
 1. คุยกับ [@BotFather](https://t.me/BotFather) → `/newbot` → ได้ **Bot Token**
 2. ทักบอทของคุณ 1 ข้อความ แล้วเปิด `https://api.telegram.org/bot<TOKEN>/getUpdates` ในเบราว์เซอร์ → หา `"chat":{"id": ...}` → นั่นคือ **Chat ID**
 
-### 4. เตรียม Anthropic API key
+### 4. เตรียม Gemini API key (ฟรี)
 
-ไปที่ [console.anthropic.com](https://console.anthropic.com) สร้าง API key (ใช้เรียก Claude สรุป+แปลภาษา)
+1. ไปที่ [aistudio.google.com/apikey](https://aistudio.google.com/apikey) ล็อกอินด้วย Google account
+2. กด **Create API key** → copy key ที่ได้ (ขึ้นต้นด้วย `AIza...`)
+3. ใช้ Free Tier ได้เลย ไม่ต้องผูกบัตร — มี rate limit จำกัดต่อนาที/ต่อวัน ซึ่งเพียงพอสำหรับงานสรุปโพสต์แบบนี้
 
 ### 5. ใส่รายชื่อบัญชี X
 
@@ -79,7 +81,7 @@ git push -u origin main
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | จากขั้นตอน 3 |
 | `TELEGRAM_CHAT_ID` | จากขั้นตอน 3 |
-| `ANTHROPIC_API_KEY` | จากขั้นตอน 4 |
+| `GEMINI_API_KEY` | จากขั้นตอน 4 |
 | `X_STORAGE_STATE_B64` | เนื้อหาในไฟล์ `x-state.b64.txt` จากขั้นตอน 2 |
 
 หลังจากนี้ GitHub Actions (`.github/workflows/checker.yml`) จะรันทุก 5 นาทีอัตโนมัติ — เช็คได้ที่แท็บ Actions ของ repo

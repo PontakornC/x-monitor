@@ -7,8 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import google.generativeai as genai
 import requests
-from anthropic import Anthropic
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
@@ -17,10 +17,11 @@ STATE_FILE = ROOT / "state.json"
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 X_STORAGE_STATE_B64 = os.environ["X_STORAGE_STATE_B64"]
 
-anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 
 
 def load_accounts() -> list[str]:
@@ -41,23 +42,13 @@ def save_state(state: dict) -> None:
 
 
 def summarize_and_translate(username: str, tweet_text: str) -> str:
-    response = anthropic_client.messages.create(
-        model="claude-opus-5",
-        max_tokens=500,
-        output_config={"effort": "low"},
-        messages=[{
-            "role": "user",
-            "content": (
-                f"สรุปโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
-                "กระชับ 2-4 ประโยค เก็บใจความสำคัญ ห้ามใส่ความเห็นหรือคำนำเพิ่มเติม "
-                "ตอบแค่เนื้อหาสรุปเท่านั้น:\n\n" + tweet_text
-            ),
-        }],
+    prompt = (
+        f"สรุปโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
+        "กระชับ 2-4 ประโยค เก็บใจความสำคัญ ห้ามใส่ความเห็นหรือคำนำเพิ่มเติม "
+        "ตอบแค่เนื้อหาสรุปเท่านั้น:\n\n" + tweet_text
     )
-    for block in response.content:
-        if block.type == "text":
-            return block.text.strip()
-    return "(สรุปไม่สำเร็จ)"
+    response = gemini_model.generate_content(prompt)
+    return response.text.strip()
 
 
 def send_telegram_draft(username: str, summary_th: str, tweet_url: str) -> None:
