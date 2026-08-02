@@ -43,10 +43,12 @@ def save_state(state: dict) -> None:
 
 def summarize_and_translate(username: str, tweet_text: str) -> str:
     prompt = (
-        f"สรุปโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
-        "กระชับ 2-4 ประโยค เก็บใจความสำคัญ "
-        "ห้ามใส่ความเห็น คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
+        f"แปลและเรียบเรียงโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
+        "ให้อ่านลื่น เป็นธรรมชาติ เหมือนนักข่าวเขียนสรุปข่าว ไม่ใช่แปลคำต่อคำแบบแข็งๆ "
+        "ความยาว 2-4 ประโยค เก็บใจความและรายละเอียดสำคัญให้ครบ "
+        "ห้ามใส่ความเห็นส่วนตัว คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
         "ห้ามใช้ Markdown หรือสัญลักษณ์จัดรูปแบบใดๆ (ห้ามมี **, *, #, -) "
+        "ห้ามระบุชื่อผู้โพสต์ในข้อความ (จะใส่ท้ายข้อความเองแยกต่างหาก) "
         "ตอบเป็นข้อความธรรมดาล้วนๆ:\n\n" + tweet_text
     )
     response = gemini_model.generate_content(prompt)
@@ -54,7 +56,7 @@ def summarize_and_translate(username: str, tweet_text: str) -> str:
 
 
 def send_telegram_draft(username: str, summary_th: str, tweet_url: str) -> None:
-    text = f"🆕 โพสต์ใหม่จาก @{username}\n\n{summary_th}\n\nต้นฉบับ: {tweet_url}"
+    text = f"{summary_th}\n\n— ข่าวจาก @{username}\nต้นฉบับ: {tweet_url}"
     resp = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         json={
