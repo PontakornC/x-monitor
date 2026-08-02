@@ -80,17 +80,30 @@ def scrape_latest_tweet(page, username: str) -> dict | None:
         print(f"[{username}] no tweets found (timeout) — skipping")
         return None
 
-    article = page.locator('article[data-testid="tweet"]').first
-    link = article.locator('a[href*="/status/"]').first
-    href = link.get_attribute("href")
-    if not href:
-        return None
-    tweet_id = href.rstrip("/").split("/")[-1]
+    articles = page.locator('article[data-testid="tweet"]')
+    count = min(articles.count(), 5)
 
-    text_locator = article.locator('div[data-testid="tweetText"]').first
-    tweet_text = text_locator.inner_text() if text_locator.count() > 0 else "(โพสต์นี้ไม่มีข้อความ อาจเป็นรูป/วิดีโอ)"
+    for i in range(count):
+        article = articles.nth(i)
 
-    return {"id": tweet_id, "text": tweet_text, "url": f"https://x.com{href}"}
+        # Skip pinned tweets — they stay at the top regardless of new posts,
+        # which would otherwise make every run see the same "latest" tweet forever.
+        social_context = article.locator('[data-testid="socialContext"]')
+        if social_context.count() > 0 and "pinned" in social_context.inner_text().lower():
+            continue
+
+        link = article.locator('a[href*="/status/"]').first
+        href = link.get_attribute("href")
+        if not href:
+            continue
+        tweet_id = href.rstrip("/").split("/")[-1]
+
+        text_locator = article.locator('div[data-testid="tweetText"]').first
+        tweet_text = text_locator.inner_text() if text_locator.count() > 0 else "(โพสต์นี้ไม่มีข้อความ อาจเป็นรูป/วิดีโอ)"
+
+        return {"id": tweet_id, "text": tweet_text, "url": f"https://x.com{href}"}
+
+    return None
 
 
 def main() -> None:
