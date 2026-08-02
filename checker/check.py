@@ -10,8 +10,6 @@ from pathlib import Path
 
 import google.generativeai as genai
 import requests
-from google import genai as google_genai
-from google.genai import types as genai_types
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
@@ -26,10 +24,6 @@ X_STORAGE_STATE_B64 = os.environ["X_STORAGE_STATE_B64"]
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel("gemini-flash-latest")
 
-# Separate client (new SDK) just for the Google Search grounding tool, which the
-# older google-generativeai library doesn't support for current Gemini models.
-search_client = google_genai.Client(api_key=GEMINI_API_KEY)
-IMAGE_SEARCH_MODEL = "gemini-flash-latest"
 IMAGE_URL_RE = re.compile(r"https?://\S+\.(?:jpg|jpeg|png|webp)(?:\?\S*)?", re.IGNORECASE)
 
 
@@ -67,21 +61,15 @@ def summarize_and_translate(username: str, tweet_text: str) -> str:
 def find_related_image(username: str, summary_th: str) -> str | None:
     prompt = (
         "จากข่าวฟุตบอลต่อไปนี้ ให้หาว่านักฟุตบอลคนไหนคือตัวเอกของข่าว "
-        "แล้วค้นหา (ผ่าน Google Search) รูปถ่ายจริงของนักฟุตบอลคนนั้นจากอินเทอร์เน็ต "
-        "เลือกรูปจากเว็บข่าวหรือแหล่งที่น่าเชื่อถือ ต้องเป็นลิงก์ตรงไปยังไฟล์รูปภาพเท่านั้น "
-        "(ลงท้ายด้วย .jpg .jpeg .png หรือ .webp)\n\n"
+        "แล้วนึกถึงลิงก์รูปถ่ายจริงของนักฟุตบอลคนนั้นที่มีอยู่จริงบนอินเทอร์เน็ตที่คุณรู้จัก "
+        "(เช่นจาก Wikipedia / Wikimedia Commons) ต้องเป็นลิงก์ตรงไปยังไฟล์รูปภาพเท่านั้น "
+        "(ลงท้ายด้วย .jpg .jpeg .png หรือ .webp) ห้ามเดา URL มั่วๆ ถ้าไม่แน่ใจว่ามีอยู่จริง\n\n"
         f"ข่าว (จาก @{username}): {summary_th}\n\n"
         "ตอบกลับด้วยลิงก์รูปภาพเพียงลิงก์เดียว ห้ามมีข้อความอื่นใดๆ "
-        "ถ้าไม่มีนักฟุตบอลที่ระบุตัวได้ชัดเจนในข่าว หรือหารูปไม่ได้ ให้ตอบว่า NONE"
+        "ถ้าไม่มีนักฟุตบอลที่ระบุตัวได้ชัดเจนในข่าว หรือไม่แน่ใจว่ามีรูปจริง ให้ตอบว่า NONE"
     )
     try:
-        response = search_client.models.generate_content(
-            model=IMAGE_SEARCH_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
-            ),
-        )
+        response = gemini_model.generate_content(prompt)
         candidate = (response.text or "").strip()
     except Exception as e:
         print(f"image search failed: {e}")
