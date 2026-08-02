@@ -29,7 +29,7 @@ gemini_model = genai.GenerativeModel("gemini-flash-latest")
 # Separate client (new SDK) just for the Google Search grounding tool, which the
 # older google-generativeai library doesn't support for current Gemini models.
 search_client = google_genai.Client(api_key=GEMINI_API_KEY)
-IMAGE_SEARCH_MODEL = "gemini-2.5-flash"
+IMAGE_SEARCH_MODEL = "gemini-flash-latest"
 IMAGE_URL_RE = re.compile(r"https?://\S+\.(?:jpg|jpeg|png|webp)(?:\?\S*)?", re.IGNORECASE)
 
 
