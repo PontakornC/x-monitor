@@ -6,7 +6,6 @@ import os
 import re
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 import google.generativeai as genai
@@ -45,50 +44,43 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def summarize_and_translate(username: str, tweet_text: str) -> str:
-    prompt = (
-        f"แปลและเรียบเรียงโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
-        "ให้อ่านลื่น เป็นธรรมชาติ เหมือนนักข่าวเขียนสรุปข่าว ไม่ใช่แปลคำต่อคำแบบแข็งๆ "
-        "ความยาว 2-4 ประโยค เก็บใจความและรายละเอียดสำคัญให้ครบ "
-        "ห้ามใส่ความเห็นส่วนตัว คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
-        "ห้ามใช้ Markdown หรือสัญลักษณ์จัดรูปแบบใดๆ (ห้ามมี **, *, #, -) "
-        "ห้ามระบุชื่อผู้โพสต์ในข้อความ (จะใส่ท้ายข้อความเองแยกต่างหาก) "
-        "ตอบเป็นข้อความธรรมดาล้วนๆ:\n\n" + tweet_text
-    )
-    response = gemini_model.generate_content(prompt)
-    return response.text.strip()
-
-
-def find_related_image(username: str, summary_th: str) -> str | None:
-    prompt = (
-        "จากข่าวฟุตบอลต่อไปนี้ ให้หาว่านักฟุตบอลคนไหนคือตัวเอกของข่าว "
-        "แล้วนึกถึงลิงก์รูปถ่ายจริงของนักฟุตบอลคนนั้นที่มีอยู่จริงบนอินเทอร์เน็ตที่คุณรู้จัก "
-        "(เช่นจาก Wikipedia / Wikimedia Commons) ต้องเป็นลิงก์ตรงไปยังไฟล์รูปภาพเท่านั้น "
-        "(ลงท้ายด้วย .jpg .jpeg .png หรือ .webp) ห้ามเดา URL มั่วๆ ถ้าไม่แน่ใจว่ามีอยู่จริง\n\n"
-        f"ข่าว (จาก @{username}): {summary_th}\n\n"
-        "ตอบกลับด้วยลิงก์รูปภาพเพียงลิงก์เดียว ห้ามมีข้อความอื่นใดๆ "
-        "ถ้าไม่มีนักฟุตบอลที่ระบุตัวได้ชัดเจนในข่าว หรือไม่แน่ใจว่ามีรูปจริง ให้ตอบว่า NONE"
-    )
-    try:
-        response = gemini_model.generate_content(prompt)
-        candidate = (response.text or "").strip()
-    except Exception as e:
-        print(f"image search failed: {e}")
+def validate_image_url(image_url: str | None) -> str | None:
+    if not image_url or not isinstance(image_url, str) or not IMAGE_URL_RE.search(image_url):
         return None
-
-    match = IMAGE_URL_RE.search(candidate)
-    if not match:
-        return None
-    image_url = match.group(0)
-
     try:
         head = requests.head(image_url, timeout=10, allow_redirects=True)
         if not head.headers.get("content-type", "").startswith("image/"):
             return None
     except requests.RequestException:
         return None
-
     return image_url
+
+
+def summarize_translate_and_find_image(username: str, tweet_text: str) -> tuple[str, str | None]:
+    # Combined into a single Gemini call (translate + image lookup) so each new post
+    # only costs one request against the free-tier per-minute quota instead of two.
+    prompt = (
+        f"แปลและเรียบเรียงโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
+        "ให้อ่านลื่น เป็นธรรมชาติ เหมือนนักข่าวเขียนสรุปข่าว ไม่ใช่แปลคำต่อคำแบบแข็งๆ "
+        "ความยาว 2-4 ประโยค เก็บใจความและรายละเอียดสำคัญให้ครบ "
+        "ห้ามใส่ความเห็นส่วนตัว คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
+        "ห้ามใช้ Markdown หรือสัญลักษณ์จัดรูปแบบใดๆ ในข้อความสรุป (ห้ามมี **, *, #, -) "
+        "ห้ามระบุชื่อผู้โพสต์ในข้อความสรุป (จะใส่ท้ายข้อความเองแยกต่างหาก)\n\n"
+        "นอกจากนี้ ให้พิจารณาว่าข่าวนี้เกี่ยวกับนักฟุตบอลคนไหนเป็นหลัก ถ้าระบุตัวได้ชัดเจน "
+        "และคุณรู้จักลิงก์รูปถ่ายจริงของนักฟุตบอลคนนั้นที่มีอยู่จริงบนอินเทอร์เน็ต "
+        "(เช่นจาก Wikipedia / Wikimedia Commons) ที่ลงท้ายด้วย .jpg .jpeg .png หรือ .webp "
+        "ให้ใส่ลิงก์นั้นมาด้วย ห้ามเดา URL มั่วๆ ถ้าไม่แน่ใจว่ามีอยู่จริงให้ใส่ null\n\n"
+        'ตอบกลับเป็น JSON เท่านั้น รูปแบบ: {"summary": "ข้อความสรุปภาษาไทย", "image_url": "ลิงก์รูปภาพ หรือ null"}\n\n'
+        "โพสต์ต้นฉบับ:\n" + tweet_text
+    )
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text)
+    summary_th = (data.get("summary") or "").strip()
+    image_url = validate_image_url(data.get("image_url"))
+    return summary_th, image_url
 
 
 def send_telegram_draft(username: str, summary_th: str, tweet_url: str, image_url: str | None) -> None:
@@ -202,16 +194,12 @@ def main() -> None:
 
             print(f"[{username}] new post {latest['id']} — summarizing")
             try:
-                # Two Gemini calls per new post (translate + image lookup) can trip the
-                # free-tier per-minute quota when several accounts post at once — a short
-                # pause between calls keeps us under it, and a failure here (e.g. 429)
-                # just skips this account for now; state isn't saved, so it's retried
-                # on the next scheduled run instead of crashing the whole job.
-                summary_th = summarize_and_translate(username, latest["text"])
-                time.sleep(3)
-                image_url = find_related_image(username, summary_th)
+                summary_th, image_url = summarize_translate_and_find_image(username, latest["text"])
                 send_telegram_draft(username, summary_th, latest["url"], image_url)
             except Exception as e:
+                # A failure here (e.g. quota) just skips this account for now; state
+                # isn't saved, so it's retried on the next scheduled run instead of
+                # crashing the whole job.
                 print(f"[{username}] error while summarizing/sending: {e} — will retry next run")
                 continue
 
