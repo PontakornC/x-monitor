@@ -3,12 +3,15 @@
 import base64
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
 
 import google.generativeai as genai
 import requests
+from google import genai as google_genai
+from google.genai import types as genai_types
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).parent
@@ -22,6 +25,12 @@ X_STORAGE_STATE_B64 = os.environ["X_STORAGE_STATE_B64"]
 
 genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel("gemini-flash-latest")
+
+# Separate client (new SDK) just for the Google Search grounding tool, which the
+# older google-generativeai library doesn't support for current Gemini models.
+search_client = google_genai.Client(api_key=GEMINI_API_KEY)
+IMAGE_SEARCH_MODEL = "gemini-2.5-flash"
+IMAGE_URL_RE = re.compile(r"https?://\S+\.(?:jpg|jpeg|png|webp)(?:\?\S*)?", re.IGNORECASE)
 
 
 def load_accounts() -> list[str]:
@@ -55,19 +64,79 @@ def summarize_and_translate(username: str, tweet_text: str) -> str:
     return response.text.strip()
 
 
-def send_telegram_draft(username: str, summary_th: str, tweet_url: str) -> None:
-    text = f"{summary_th}\n\n— ข่าวจาก @{username}\nต้นฉบับ: {tweet_url}"
+def find_related_image(username: str, summary_th: str) -> str | None:
+    prompt = (
+        "ค้นหารูปข่าวจริงจากอินเทอร์เน็ต (ผ่าน Google Search) ที่เกี่ยวข้องกับเนื้อหาข่าวต่อไปนี้ "
+        "เลือกรูปจากเว็บข่าวหรือแหล่งที่น่าเชื่อถือ ต้องเป็นลิงก์ตรงไปยังไฟล์รูปภาพเท่านั้น "
+        "(ลงท้ายด้วย .jpg .jpeg .png หรือ .webp)\n\n"
+        f"ข่าว (จาก @{username}): {summary_th}\n\n"
+        "ตอบกลับด้วยลิงก์รูปภาพเพียงลิงก์เดียว ห้ามมีข้อความอื่นใดๆ "
+        "ถ้าหารูปที่เกี่ยวข้องจริงๆ ไม่ได้ ให้ตอบว่า NONE"
+    )
+    try:
+        response = search_client.models.generate_content(
+            model=IMAGE_SEARCH_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())]
+            ),
+        )
+        candidate = (response.text or "").strip()
+    except Exception as e:
+        print(f"image search failed: {e}")
+        return None
+
+    match = IMAGE_URL_RE.search(candidate)
+    if not match:
+        return None
+    image_url = match.group(0)
+
+    try:
+        head = requests.head(image_url, timeout=10, allow_redirects=True)
+        if not head.headers.get("content-type", "").startswith("image/"):
+            return None
+    except requests.RequestException:
+        return None
+
+    return image_url
+
+
+def send_telegram_draft(username: str, summary_th: str, tweet_url: str, image_url: str | None) -> None:
+    lines = [summary_th, "", f"— ข่าวจาก @{username}", f"ต้นฉบับ: {tweet_url}"]
+    if image_url:
+        lines.append(f"รูป: {image_url}")
+    text = "\n".join(lines)
+
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ Approve", "callback_data": "approve"},
+            {"text": "❌ Reject", "callback_data": "reject"},
+        ]]
+    }
+
+    # Telegram photo captions are capped at 1024 chars (vs 4096 for text messages),
+    # so only attach the photo if the whole draft still fits.
+    if image_url and len(text) <= 1024:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto",
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "photo": image_url,
+                "caption": text,
+                "reply_markup": keyboard,
+            },
+            timeout=15,
+        )
+        if resp.ok:
+            return
+        print(f"sendPhoto failed ({resp.status_code}): {resp.text} — falling back to text message")
+
     resp = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         json={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": text,
-            "reply_markup": {
-                "inline_keyboard": [[
-                    {"text": "✅ Approve", "callback_data": "approve"},
-                    {"text": "❌ Reject", "callback_data": "reject"},
-                ]]
-            },
+            "reply_markup": keyboard,
         },
         timeout=15,
     )
@@ -143,7 +212,8 @@ def main() -> None:
 
             print(f"[{username}] new post {latest['id']} — summarizing")
             summary_th = summarize_and_translate(username, latest["text"])
-            send_telegram_draft(username, summary_th, latest["url"])
+            image_url = find_related_image(username, summary_th)
+            send_telegram_draft(username, summary_th, latest["url"], image_url)
 
             state[username] = latest["id"]
             save_state(state)  # save after each account so partial progress isn't lost
