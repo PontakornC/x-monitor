@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import google.generativeai as genai
@@ -200,9 +201,19 @@ def main() -> None:
                 continue
 
             print(f"[{username}] new post {latest['id']} — summarizing")
-            summary_th = summarize_and_translate(username, latest["text"])
-            image_url = find_related_image(username, summary_th)
-            send_telegram_draft(username, summary_th, latest["url"], image_url)
+            try:
+                # Two Gemini calls per new post (translate + image lookup) can trip the
+                # free-tier per-minute quota when several accounts post at once — a short
+                # pause between calls keeps us under it, and a failure here (e.g. 429)
+                # just skips this account for now; state isn't saved, so it's retried
+                # on the next scheduled run instead of crashing the whole job.
+                summary_th = summarize_and_translate(username, latest["text"])
+                time.sleep(3)
+                image_url = find_related_image(username, summary_th)
+                send_telegram_draft(username, summary_th, latest["url"], image_url)
+            except Exception as e:
+                print(f"[{username}] error while summarizing/sending: {e} — will retry next run")
+                continue
 
             state[username] = latest["id"]
             save_state(state)  # save after each account so partial progress isn't lost
