@@ -52,7 +52,9 @@ export default async function handler(req, res) {
 
   try {
     if (callback.data === "approve") {
-      const draftText = originalText.replace(/^🆕 โพสต์ใหม่จาก @\S+\n\n/, "");
+      // Telegram draft ends with "\nต้นฉบับ: <url>" — drop that line so the
+      // link isn't posted to the Page, but keep the "— ข่าวจาก @user" credit above it.
+      const draftText = originalText.replace(/\nต้นฉบับ: \S+$/, "").trim();
       await postToFacebookPage(draftText);
       await telegramApi("editMessageText", {
         chat_id: chatId,
