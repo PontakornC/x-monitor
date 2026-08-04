@@ -1,12 +1,15 @@
 # x-monitor
 
-เช็คโพสต์ใหม่จากบัญชี X (Twitter) ที่กำหนดทุก 5 นาที สรุป+แปลเป็นไทยด้วย Gemini (free tier) แล้วส่งเข้า Telegram ให้กดอนุมัติก่อนโพสต์เข้า Facebook Page
+เช็คโพสต์ใหม่จากบัญชี X (Twitter) ที่กำหนดทุกชั่วโมง สรุป+แปลเป็นไทยด้วย Gemini (free tier) แล้วส่งเข้า Telegram ให้กดอนุมัติก่อนโพสต์เข้า Facebook Page
 
 ## สถาปัตยกรรม
 
 ```
-GitHub Actions (ทุก 5 นาที)
-  -> checker/check.py: สแครป X ด้วย Playwright -> เทียบ state.json -> สรุป+แปลด้วย Gemini -> ส่ง Telegram (ปุ่ม Approve/Reject)
+GitHub Actions (ทุก 1 ชั่วโมง)
+  -> checker/check.py:
+       1. สแครปทุกบัญชีก่อน เทียบกับ state.json หาโพสต์ใหม่ทั้งหมด
+       2. เรียก Gemini "ครั้งเดียว" สรุป+แปลโพสต์ใหม่ทั้งหมดพร้อมกัน (ประหยัด quota free tier)
+       3. ส่ง Telegram ทีละโพสต์ (ปุ่ม Approve/Reject)
 
 Vercel (webhook แบบ event-based, ฟรี)
   -> webhook/api/telegram.js: รับปุ่มที่กด -> ถ้า Approve โพสต์เข้า Facebook Page ผ่าน Graph API
@@ -84,7 +87,7 @@ git push -u origin main
 | `GEMINI_API_KEY` | จากขั้นตอน 4 |
 | `X_STORAGE_STATE_B64` | เนื้อหาในไฟล์ `x-state.b64.txt` จากขั้นตอน 2 |
 
-หลังจากนี้ GitHub Actions (`.github/workflows/checker.yml`) จะรันทุก 5 นาทีอัตโนมัติ — เช็คได้ที่แท็บ Actions ของ repo
+หลังจากนี้ GitHub Actions (`.github/workflows/checker.yml`) จะรันทุก 1 ชั่วโมงอัตโนมัติ — เช็คได้ที่แท็บ Actions ของ repo
 
 ⚠️ ถ้า repo ไม่มี activity 60 วัน GitHub จะ auto-disable scheduled workflow ต้องเข้าไปกดเปิดใหม่เอง (แค่ push commit เล็กๆ ก็นับ)
 
@@ -136,5 +139,6 @@ curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 ## ข้อจำกัดที่รู้ไว้
 
 - X อาจบล็อก/CAPTCHA ถ้า session cookies หมดอายุ — ต้องรัน `get_x_cookies.py` ใหม่แล้วอัปเดต secret `X_STORAGE_STATE_B64`
-- GitHub Actions cron ทุก 5 นาทีอาจดีเลย์ได้ช่วง GitHub โหลดสูง
+- GitHub Actions cron แม้ตั้ง `0 * * * *` (ทุกชั่วโมงตรง) ก็ยังอาจดีเลย์ได้บ้างช่วง GitHub โหลดสูง โดยเฉพาะ repo ที่มี activity น้อย
+- Gemini free tier มี quota จำกัด (ตรวจสอบ limit ปัจจุบันได้ที่ [aistudio.google.com/apikey](https://aistudio.google.com/apikey) ในเมนู usage) — โค้ดออกแบบให้เรียก Gemini แค่ **1 ครั้งต่อรอบ** (รวมทุกโพสต์ใหม่เป็น request เดียว) เพื่อประหยัด quota ไม่ว่ารอบนั้นจะเจอโพสต์ใหม่กี่บัญชีก็ตาม
 - Facebook Page Access Token แบบปกติหมดอายุใน 60 วัน ถ้าไม่ extend เป็น long-lived — เช็คให้ดีตอนสร้าง

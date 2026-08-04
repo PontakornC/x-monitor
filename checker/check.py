@@ -1,9 +1,13 @@
-"""Check X accounts for new posts, summarize+translate to Thai, send to Telegram for approval."""
+"""Check X accounts for new posts, summarize+translate to Thai, send to Telegram for approval.
+
+Runs hourly. Scrapes every account first, then makes a single batched Gemini
+call for all new posts found in that run (not one call per post) to stay
+within the free-tier request quota.
+"""
 
 import base64
 import json
 import os
-import sys
 import tempfile
 from pathlib import Path
 
@@ -41,18 +45,29 @@ def save_state(state: dict) -> None:
     STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def summarize_and_translate(username: str, tweet_text: str) -> str:
+def summarize_and_translate_batch(posts: list[dict]) -> list[str]:
+    """One Gemini call for every new post found this run, instead of one call per post."""
+    items = [{"index": i, "text": p["text"]} for i, p in enumerate(posts)]
     prompt = (
-        f"แปลและเรียบเรียงโพสต์ X (Twitter) ของ @{username} ต่อไปนี้เป็นภาษาไทย "
-        "ให้อ่านลื่น เป็นธรรมชาติ เหมือนนักข่าวเขียนสรุปข่าว ไม่ใช่แปลคำต่อคำแบบแข็งๆ "
-        "ความยาว 2-4 ประโยค เก็บใจความและรายละเอียดสำคัญให้ครบ "
-        "ห้ามใส่ความเห็นส่วนตัว คำนำ หรือทางเลือกหลายแบบ ตอบเวอร์ชันเดียวเท่านั้น "
+        f"ต่อไปนี้คือโพสต์ X (Twitter) จำนวน {len(items)} โพสต์ ในรูปแบบ JSON array "
+        "แต่ละอันมี index กับ text:\n\n"
+        + json.dumps(items, ensure_ascii=False)
+        + "\n\nแปลและเรียบเรียงแต่ละโพสต์เป็นภาษาไทย ให้อ่านลื่นเป็นธรรมชาติ "
+        "เหมือนนักข่าวเขียนสรุปข่าว ไม่ใช่แปลคำต่อคำแบบแข็งๆ "
+        "ความยาว 2-4 ประโยคต่อโพสต์ เก็บใจความและรายละเอียดสำคัญให้ครบ "
+        "ห้ามใส่ความเห็นส่วนตัว คำนำ หรือชื่อผู้โพสต์ในเนื้อหา "
         "ห้ามใช้ Markdown หรือสัญลักษณ์จัดรูปแบบใดๆ (ห้ามมี **, *, #, -) "
-        "ห้ามระบุชื่อผู้โพสต์ในข้อความ (จะใส่ท้ายข้อความเองแยกต่างหาก) "
-        "ตอบเป็นข้อความธรรมดาล้วนๆ:\n\n" + tweet_text
+        "ตอบกลับเป็น JSON array ของสตริงเท่านั้น ความยาวเท่ากับจำนวนโพสต์ที่ให้ไปเป๊ะ "
+        "เรียงลำดับตาม index เดิม ห้ามมีข้อความอื่นนอกเหนือจาก JSON array"
     )
-    response = gemini_model.generate_content(prompt)
-    return response.text.strip()
+    response = gemini_model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    summaries = json.loads(response.text)
+    if len(summaries) != len(posts):
+        raise ValueError(f"expected {len(posts)} summaries, got {len(summaries)}")
+    return summaries
 
 
 def send_telegram_draft(username: str, summary_th: str, tweet_url: str) -> None:
@@ -124,6 +139,9 @@ def main() -> None:
         f.write(storage_state_json)
         storage_state_path = f.name
 
+    # Phase 1: scrape every account first, collect all new posts. No Gemini
+    # calls yet — we want exactly one batched call at the end, not one per post.
+    new_posts = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=storage_state_path)
@@ -139,28 +157,38 @@ def main() -> None:
             if latest is None:
                 continue
 
-            last_seen = state.get(username)
-            if latest["id"] == last_seen:
+            if latest["id"] == state.get(username):
                 print(f"[{username}] no new post")
                 continue
 
-            print(f"[{username}] new post {latest['id']} — summarizing")
-            try:
-                summary_th = summarize_and_translate(username, latest["text"])
-                send_telegram_draft(username, summary_th, latest["url"])
-            except Exception as e:
-                # A failure here (e.g. quota) just skips this account for now; state
-                # isn't saved, so it's retried on the next scheduled run instead of
-                # crashing the whole job.
-                print(f"[{username}] error while summarizing/sending: {e} — will retry next run")
-                continue
-
-            state[username] = latest["id"]
-            save_state(state)  # save after each account so partial progress isn't lost
+            print(f"[{username}] new post {latest['id']}")
+            new_posts.append({"username": username, **latest})
 
         browser.close()
 
     os.unlink(storage_state_path)
+
+    if not new_posts:
+        print("no new posts across any account this run")
+        return
+
+    # Phase 2: one Gemini call for all new posts found this run.
+    try:
+        summaries = summarize_and_translate_batch(new_posts)
+    except Exception as e:
+        # Don't touch state — every post here gets retried as "new" next run.
+        print(f"batch summarization failed: {e} — will retry next run")
+        return
+
+    for post, summary_th in zip(new_posts, summaries):
+        try:
+            send_telegram_draft(post["username"], summary_th, post["url"])
+        except Exception as e:
+            print(f"[{post['username']}] failed to send to Telegram: {e} — will retry next run")
+            continue
+        state[post["username"]] = post["id"]
+
+    save_state(state)
 
 
 if __name__ == "__main__":
